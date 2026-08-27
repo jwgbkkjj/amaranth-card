@@ -146,10 +146,8 @@ def classify_with_gemini(client, batch_df):
             "card_last4": str(row.get("카드번호", ""))[-4:],
         })
 
-    prompt = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
-
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-1.5-flash",  # 또는 "gemini-2.0-flash"
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
