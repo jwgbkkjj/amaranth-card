@@ -17,7 +17,7 @@ st.set_page_config(page_title="AI 법인카드 전표 변환기", page_icon="�
 PASSWORD = "sj123456!"
 
 # ==============================================================================
-# [설정 2] Google Gemini API Key
+# [설정 2] Google Gemini API Key (Streamlit Secrets 연동)
 # ==============================================================================
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -25,7 +25,7 @@ except:
     GEMINI_API_KEY = ""
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("사내 회계데이터 학습 완료 | 신한/우리/하나카드 자동 인식 | 아마란스 10 정규 양식 (E,I,L 공란)")
+st.caption("사내 회계데이터 학습 완료 | 부서별/카드별 세부 규칙 적용")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -46,7 +46,6 @@ with st.sidebar:
     st.header("🏢 아마란스 10 기본값")
     default_year = st.text_input("전표 기본 연도", value=str(datetime.now().year))
     default_credit_account = st.text_input("대변(미지급금) 계정코드", value="2530000")
-    st.info("💡 신한/우리/하나카드는 업로드 시 대변 거래처명이 자동으로 지정됩니다.")
 
 # ------------------------------------------------------------------------------
 # 데이터 구조 및 헬퍼 함수
@@ -135,7 +134,7 @@ def classify_with_gemini(client, batch_df):
        - 삼성화재/보험사: '8210000' (보험료)
        - 소모품/공구/철물/문구: 관리부 카드('5630','1072','4760')는 '8300000', 그 외 카드는 '5300000'
 
-    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요.
+    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요. (예: 주유비, 사무용품, 접대 식대 등)
     """
 
     data_summary = []
@@ -149,9 +148,9 @@ def classify_with_gemini(client, batch_df):
 
     prompt_str = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
-    # 공식 지원 모델 gemini-2.5-flash
+    # ❗ [핵심 수정] 공식 지원 모델인 gemini-1.5-flash 로 완벽 적용
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         contents=prompt_str,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -164,7 +163,7 @@ def classify_with_gemini(client, batch_df):
 # -------------------------------------------------------------
 # 파일 업로드 UI & 데이터 정제
 # -------------------------------------------------------------
-uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일(.xlsx, .xls, .csv) 업로드", type=["xlsx", "xls", "csv"])
+uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일 업로드", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
     try:
@@ -201,7 +200,7 @@ if uploaded_file is not None:
     if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("사내 기준 적용 및 전표 생성 중..."):
+        with st.spinner("AI 및 부서별 카드 규칙 적용하여 전표 생성 중..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
@@ -220,12 +219,13 @@ if uploaded_file is not None:
                 st.warning("유효한 결제 내역을 찾지 못했습니다.")
                 st.stop()
 
-            # AI 분석 시도 (실패 시 기본 룰 기반 안전 fallback)
+            # ❗ AI 분석 시도 (실패 시 에러 메시지를 화면에 명확히 띄워줍니다)
             try:
                 ai_result = classify_with_gemini(client, temp_df)
                 result_map = {item["index"]: item for item in ai_result.get("items", [])}
             except Exception as e:
-                st.info(f"💡 AI 분석 대체 로직(기본 사내 룰)으로 자동 처리합니다.")
+                st.error(f"❌ AI 분석 중 에러가 발생했습니다: {e}")
+                st.warning("AI가 작동하지 않아 부서별 하드 코딩 룰만 적용됩니다. (결과가 부정확할 수 있습니다)")
                 result_map = {}
 
             SALES_CARDS = {"6788", "3992", "7786", "3958"}
@@ -259,11 +259,13 @@ if uploaded_file is not None:
                 except:
                     is_weekend = False
 
+                # AI 결과 받아오기 (AI가 실패했을 경우 5300000 기본값 사용)
                 ai_info = result_map.get(idx, {})
                 acct_code = ai_info.get("account_code", "5300000")
                 remark = ai_info.get("remark", "카드대금")
                 cat_type = ai_info.get("category_type", "OTHER")
 
+                # 음식점/소모품 여부 2차 판별
                 is_food = ("식" in raw_merchant or "카페" in raw_merchant or "커피" in raw_merchant or 
                            "다과" in raw_merchant or "베이커리" in raw_merchant or "장어" in raw_merchant or
                            "이자카야" in raw_merchant or "뷔페" in raw_merchant or
@@ -271,7 +273,7 @@ if uploaded_file is not None:
                 is_supplies = ("소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES" or
                                "쿠팡" in raw_merchant or "디포" in raw_merchant or "네이버" in raw_merchant)
 
-                # 파이썬 규칙 적용
+                # ====== 파이썬 강제 규칙 (부서별 우선 적용) ======
                 if last4 in SALES_CARDS:
                     if is_food:
                         if total_amt >= 15000:
