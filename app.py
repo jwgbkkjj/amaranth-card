@@ -17,7 +17,7 @@ st.set_page_config(page_title="AI 법인카드 전표 변환기", page_icon="�
 PASSWORD = "sj123456!"
 
 # ==============================================================================
-# [설정 2] Google Gemini API Key (Streamlit Secrets 연동)
+# [설정 2] Google Gemini API Key
 # ==============================================================================
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -25,7 +25,7 @@ except:
     GEMINI_API_KEY = ""
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("사내 회계데이터 학습 완료 | 부서별/카드별 세부 규칙 적용")
+st.caption("사내 회계데이터 학습 완료 | 신한/우리/하나카드 자동 인식 | 아마란스 10 정규 양식 (E,I,L 공란)")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -46,16 +46,17 @@ with st.sidebar:
     st.header("🏢 아마란스 10 기본값")
     default_year = st.text_input("전표 기본 연도", value=str(datetime.now().year))
     default_credit_account = st.text_input("대변(미지급금) 계정코드", value="2530000")
+    st.info("💡 신한/우리/하나카드는 업로드 시 대변 거래처명이 자동으로 지정됩니다.")
 
 # ------------------------------------------------------------------------------
 # 데이터 구조 및 헬퍼 함수
 # ------------------------------------------------------------------------------
 class ClassificationResult(BaseModel):
     index: int
-    category_type: str = Field(description="분류: MEAL, SUPPLIES, TRAFFIC, FEE, OTHER")
-    account_code: str = Field(description="7자리 계정과목코드")
+    category_type: str = Field(description="분류: 'MEAL', 'SUPPLIES', 'TRAFFIC', 'FEE', 'OTHER'")
+    account_code: str = Field(description="계정과목코드")
     account_name: str = Field(description="계정과목명")
-    remark: str = Field(description="전표 적요")
+    remark: str = Field(description="전표 적요 (사용 목적만 간결하게)")
 
 class BatchClassification(BaseModel):
     items: list[ClassificationResult]
@@ -109,7 +110,7 @@ def clean_date(val, base_year):
     return val_str[:8]
 
 # ------------------------------------------------------------------------------
-# AI 분류 함수
+# AI 모델 호출 함수
 # ------------------------------------------------------------------------------
 def classify_with_gemini(client, batch_df):
     system_instruction = """
@@ -122,16 +123,17 @@ def classify_with_gemini(client, batch_df):
     - 공무팀 카드 (4490, 9530): 대부분 '5300000'(소모품비-제조)로 처리하며, 식대는 '5110000'(복리후생비-제조)로 처리.
 
     [일반 사내 회계 기준 (7자리)]
-    1. 온라인 PG 및 결제대행사:
+    1. 온라인 PG 및 결제대행사 (사내 이력 학습):
        - 이니시스, NICE결제대행, 나이스페이: 신용조사/수수료 건은 '8310000' (지급수수료), 물품 구매는 '5300000'/'8300000' (소모품비)
-       - 네이버페이, 쿠팡, 토스페이먼츠: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
-       - 카카오T, 나이스인프라: '8120000' (여비교통비)
-       - 알림SMS: '8310000' (지급수수료) 또는 '8140000' (통신비)
+       - 네이버페이, 네이버파이낸셜, 쿠팡, 토스페이먼츠, 11번가: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
+       - 카카오T (택시, 대리, 주차), 나이스인프라: '8120000' (여비교통비)
+       - 카드알림SMS, 통신사알림: '8310000' (지급수수료) 또는 '8140000' (통신비)
     2. 오프라인 가맹점 기준:
-       - 식당/카페/주점: 기본 '8110000' (복리후생비-판관)
-       - 주유소/세차/하이패스: '8220000' (차량유지비)
-       - 우정사업본부(우체국): '8140000' (통신비)
-       - 보험사: '8210000' (보험료)
+       - 식당/카페/주점/제과/음식점: 기본 '8110000' (복리후생비-판관)
+       - 주유소/세차/정비/하이패스: '8220000' (차량유지비)
+       - 우정사업본부(우체국) 등기/택배: '8140000' (통신비)
+       - 삼성화재/보험사: '8210000' (보험료)
+       - 소모품/공구/철물/문구: 관리부 카드('5630','1072','4760')는 '8300000', 그 외 카드는 '5300000'
 
     * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요.
     """
@@ -145,11 +147,12 @@ def classify_with_gemini(client, batch_df):
             "card_last4": str(row.get("카드번호", ""))[-4:],
         })
 
-    prompt_text = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
+    prompt_str = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
+    # 공식 지원 모델 gemini-2.5-flash
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=prompt_text,
+        contents=prompt_str,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
             response_mime_type="application/json",
@@ -159,9 +162,9 @@ def classify_with_gemini(client, batch_df):
     return json.loads(response.text)
 
 # -------------------------------------------------------------
-# 파일 업로드 및 변환 UI
+# 파일 업로드 UI & 데이터 정제
 # -------------------------------------------------------------
-uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일 업로드", type=["xlsx", "xls", "csv"])
+uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일(.xlsx, .xls, .csv) 업로드", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
     try:
@@ -198,7 +201,7 @@ if uploaded_file is not None:
     if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("부서별 카드 규칙 적용 및 전표 생성 중..."):
+        with st.spinner("사내 기준 적용 및 전표 생성 중..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
@@ -217,8 +220,13 @@ if uploaded_file is not None:
                 st.warning("유효한 결제 내역을 찾지 못했습니다.")
                 st.stop()
 
-            ai_result = classify_with_gemini(client, temp_df)
-            result_map = {item["index"]: item for item in ai_result.get("items", [])}
+            # AI 분석 시도 (실패 시 기본 룰 기반 안전 fallback)
+            try:
+                ai_result = classify_with_gemini(client, temp_df)
+                result_map = {item["index"]: item for item in ai_result.get("items", [])}
+            except Exception as e:
+                st.info(f"💡 AI 분석 대체 로직(기본 사내 룰)으로 자동 처리합니다.")
+                result_map = {}
 
             SALES_CARDS = {"6788", "3992", "7786", "3958"}
             CEO_CARDS = {"8348"}
@@ -257,11 +265,13 @@ if uploaded_file is not None:
                 cat_type = ai_info.get("category_type", "OTHER")
 
                 is_food = ("식" in raw_merchant or "카페" in raw_merchant or "커피" in raw_merchant or 
-                           "다과" in raw_merchant or "베이커리" in raw_merchant or 
+                           "다과" in raw_merchant or "베이커리" in raw_merchant or "장어" in raw_merchant or
+                           "이자카야" in raw_merchant or "뷔페" in raw_merchant or
                            cat_type == "MEAL" or "8110000" in acct_code or "5110000" in acct_code)
-                is_supplies = ("소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES")
+                is_supplies = ("소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES" or
+                               "쿠팡" in raw_merchant or "디포" in raw_merchant or "네이버" in raw_merchant)
 
-                # ====== 파이썬 강제 규칙 ======
+                # 파이썬 규칙 적용
                 if last4 in SALES_CARDS:
                     if is_food:
                         if total_amt >= 15000:
@@ -344,13 +354,13 @@ if uploaded_file is not None:
             st.success("✅ 사내 기준 맞춤 전표 변환이 완료되었습니다!")
             st.dataframe(df_amaranth, use_container_width=True)
 
+            # 엑셀 파일 생성
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_amaranth.to_excel(writer, index=False, sheet_name="아마란스전표업로드")
                 worksheet = writer.sheets["아마란스전표업로드"]
                 
                 weekend_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-                
                 for i, is_week in enumerate(weekend_flags):
                     if is_week:
                         for cell in worksheet[i + 2]:
