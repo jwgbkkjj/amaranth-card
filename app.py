@@ -156,7 +156,7 @@ def classify_with_gemini(client, batch_df, entertain_code):
     prompt_str = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt_str,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
