@@ -25,7 +25,7 @@ except:
     GEMINI_API_KEY = ""
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("사내 회계데이터 학습 완료 | 접대비 코드 정확 반영 | 부서별/카드별 세부 규칙 적용")
+st.caption("사내 맞춤 회계 규칙 업데이트 완료 | 신한/우리/하나카드 지원")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -53,10 +53,10 @@ with st.sidebar:
 # ------------------------------------------------------------------------------
 class ClassificationResult(BaseModel):
     index: int
-    category_type: str = Field(description="분류: 'MEAL', 'SUPPLIES', 'TRAFFIC', 'FEE', 'OTHER'")
+    category_type: str = Field(description="분류: 'MEAL', 'CAFE', 'SUPPLIES', 'TRAFFIC', 'FEE', 'OTHER'")
     account_code: str = Field(description="계정과목코드")
     account_name: str = Field(description="계정과목명")
-    remark: str = Field(description="전표 적요 (사용 목적만 간결하게)")
+    remark: str = Field(description="전표 적요 (가맹점명 제외, 사용 목적만 간결하게)")
 
 class BatchClassification(BaseModel):
     items: list[ClassificationResult]
@@ -118,25 +118,30 @@ def classify_with_gemini(client, batch_df, entertain_code):
     제공된 법인카드 승인내역을 당사의 [실제 회계 처리 이력 및 카드별 세부 기준]에 따라 정확하게 계정과목으로 분류하세요.
 
     [카드 번호 및 부서별 특수 규칙]
-    - 영업사원 카드 (6788, 3992, 7786, 3958): 15,000원 이상 식대는 '{entertain_code}'(접대비). 그 미만은 '8110000'(복리후생비).
-    - 대표이사 카드 (8348): 식대는 무조건 '{entertain_code}'(접대비). 쿠팡와우는 '8310000', 일반 쿠팡 구매는 '5300000'.
-    - 공무팀 카드 (4490, 9530): 대부분 '5300000'(소모품비-제조)로 처리하며, 식대는 '5110000'(복리후생비-제조)로 처리.
+    - 영업사원 카드 (6788, 3992, 7786, 3958, 9389): 
+       * 카페/커피: 10,000원 이상은 '{entertain_code}'(접대비), 10,000원 미만은 '8110000'(복리후생비).
+       * 일반 식당: 15,000원 이상은 '{entertain_code}'(접대비), 15,000원 미만은 '8110000'(복리후생비).
+    - 대표이사 카드 (8348): 식대/카페는 무조건 '{entertain_code}'(접대비). 쿠팡와우는 '8310000', 일반 쿠팡 구매는 '5300000'.
+    - 공무팀 카드 (4490, 9530): 대부분 '5300000'(소모품비-제조), 식대는 '5110000'(복리후생비-제조).
+
+    [사내 특별 가맹점 규칙]
+    - 현장 자재/부품/소모품/공구/철물/베어링/배관/모터/전기자재/밸브/오일: 어떤 카드로 결제하든 무조건 '5300000'(소모품비-제조원가).
+    - '리더코스메틱', '리더스코스메틱' 또는 택배 박스/상자 구매: '8140000'(통신비), 적요는 '포장상자'.
+    - '세외수입': '8120000'(여비교통비), 적요는 '공영주차료'.
 
     [일반 사내 회계 기준]
     1. 온라인 PG 및 결제대행사:
        - 이니시스, NICE결제대행, 나이스페이: 신용조사/수수료 건은 '8310000' (지급수수료), 물품 구매는 '5300000'/'8300000' (소모품비)
-       - 네이버페이, 네이버파이낸셜, 쿠팡, 토스페이먼츠: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
+       - 네이버페이, 쿠팡, 토스페이먼츠: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
        - 카카오T (택시, 대리, 주차), 나이스인프라: '8120000' (여비교통비)
        - 카드알림SMS, 통신사알림: '8310000' (지급수수료) 또는 '8140000' (통신비)
-    2. 오프라인 가맹점 기준:
-       - 식당/카페/주점/제과/음식점: 기본 '8110000' (복리후생비-판관)
-       - 주유소/세차/정비/하이패스: '8220000' (차량유지비)
-       - 우정사업본부(우체국) 등기/택배: '8140000' (통신비)
-       - 삼성화재/보험사: '8210000' (보험료)
-       - 소모품/문구: 관리부 카드('5630','1072','4760')는 '8300000', 그 외 카드는 '5300000'
-       - 공구/철물: '5300000' 
+    2. 오프라인 가맹점:
+       - 식당/카페/주점: 기본 '8110000' (복리후생비-판관)
+       - 주유소/세차/하이패스: '8220000' (차량유지비)
+       - 우정사업본부(우체국): '8140000' (통신비)
+       - 보험사: '8210000' (보험료)
 
-    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요.
+    * 적요는 가맹점명을 제외하고 사용 목적만 간결하게 작성하세요.
     """
 
     data_summary = []
@@ -151,7 +156,7 @@ def classify_with_gemini(client, batch_df, entertain_code):
     prompt_str = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-1.5-flash",
         contents=prompt_str,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -162,7 +167,7 @@ def classify_with_gemini(client, batch_df, entertain_code):
     return json.loads(response.text)
 
 # -------------------------------------------------------------
-# 파일 업로드 UI & 데이터 정제
+# 파일 업로드 UI & 데이터 처리
 # -------------------------------------------------------------
 uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일 업로드", type=["xlsx", "xls", "csv"])
 
@@ -201,7 +206,7 @@ if uploaded_file is not None:
     if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("사내 기준 적용 및 전표 생성 중..."):
+        with st.spinner("사내 맞춤 기준 적용 및 전표 생성 중..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
@@ -227,7 +232,8 @@ if uploaded_file is not None:
                 st.error(f"❌ AI 분석 중 에러가 발생했습니다: {e}")
                 result_map = {}
 
-            SALES_CARDS = {"6788", "3992", "7786", "3958"}
+            # 영업부 카드 목록 (9389 추가)
+            SALES_CARDS = {"6788", "3992", "7786", "3958", "9389"}
             CEO_CARDS = {"8348"}
             MAINT_CARDS = {"4490", "9530"}
             ADMIN_CARDS = {"5630", "1072", "4760"}
@@ -263,29 +269,68 @@ if uploaded_file is not None:
                 remark = ai_info.get("remark", "카드대금")
                 cat_type = ai_info.get("category_type", "OTHER")
 
-                # 접대비 코드가 811000 등으로 오인식되지 않도록 방어
+                # 접대비 명칭 보정
                 if "접대" in ai_info.get("account_name", "") or acct_code in ["8130003", "811003", "8130000"]:
                     acct_code = custom_entertain_code
 
-                is_food = ("식" in raw_merchant or "카페" in raw_merchant or "커피" in raw_merchant or 
-                           "다과" in raw_merchant or "베이커리" in raw_merchant or "장어" in raw_merchant or
-                           "이자카야" in raw_merchant or "뷔페" in raw_merchant or
-                           cat_type == "MEAL" or "8110000" in acct_code or "5110000" in acct_code)
-                is_supplies = ("소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES" or
-                               "쿠팡" in raw_merchant or "디포" in raw_merchant or "네이버" in raw_merchant)
+                # 카페/커피 여부
+                is_cafe = any(k in raw_merchant for k in ["카페", "커피", "스타벅스", "투썸", "이디야", "메가커피", "컴포즈", "빽다방", "폴바셋", "달콤", "할리스", "베이커리", "디저트", "다과"]) or (cat_type == "CAFE")
+                
+                # 식당/음식점 여부
+                is_food = is_cafe or any(k in raw_merchant for k in ["식", "식당", "갈비", "국밥", "추어", "뷔페", "주점", "이자카야", "회", "스시", "포차", "호프", "고기", "통닭", "치킨", "반점", "중화", "짜장"]) or (cat_type == "MEAL") or ("8110000" in acct_code) or ("5110000" in acct_code)
 
-                # ====== 파이썬 강제 규칙 ======
-                if last4 in SALES_CARDS:
-                    if is_food:
+                # 현장 자재/부품/소모품 여부 (공무팀 거래처 및 관련 키워드)
+                is_factory_supply = any(k in raw_merchant for k in ["볼트", "너트", "철물", "공구", "베어링", "배관", "밸브", "모터", "전기자재", "콤프레샤", "오일", "가스", "기계", "패킹", "호스", "윤활유", "철강", "자재", "테크", "엔지니어링"])
+                
+                # 일반 소모품 여부
+                is_supplies = is_factory_supply or ("소모품" in ai_info.get("account_name", "")) or (cat_type == "SUPPLIES") or any(k in raw_merchant for k in ["쿠팡", "디포", "네이버"])
+
+                # ==========================================================
+                # [강제 규칙 1] 리더코스메틱 상자 -> 통신비 (8140000)
+                # ==========================================================
+                if "리더" in raw_merchant and ("코스메틱" in raw_merchant or "상자" in raw_merchant or "박스" in raw_merchant):
+                    acct_code = "8140000"
+                    remark = "포장상자"
+                elif ("상자" in raw_merchant or "박스" in raw_merchant) and ("제조" not in raw_merchant and "공구" not in raw_merchant):
+                    acct_code = "8140000"
+                    remark = "포장상자"
+
+                # ==========================================================
+                # [강제 규칙 2] 세외수입 -> 주차료 (8120000)
+                # ==========================================================
+                elif "세외수입" in raw_merchant:
+                    acct_code = "8120000"
+                    remark = "공영주차료"
+
+                # ==========================================================
+                # [강제 규칙 3] 현장 자재/부품/공구류 -> 무조건 소모품비-제조 (5300000)
+                # ==========================================================
+                elif is_factory_supply:
+                    acct_code = "5300000"
+                    if remark == "카드대금": remark = "현장 자재/부품"
+
+                # ==========================================================
+                # [강제 규칙 4] 부서별/카드별 세부 규칙
+                # ==========================================================
+                elif last4 in SALES_CARDS:  # 영업부 카드
+                    if is_cafe:  # 카페 10,000원 기준
+                        if total_amt >= 10000:
+                            acct_code = custom_entertain_code
+                            remark = "거래처 접대"
+                        else:
+                            acct_code = "8110000"
+                            if remark == "카드대금": remark = "부서 간식/커피"
+                    elif is_food:  # 일반 식대 15,000원 기준
                         if total_amt >= 15000:
                             acct_code = custom_entertain_code
                             remark = "거래처 접대"
                         else:
                             acct_code = "8110000"
-                            if remark == "카드대금": remark = "부서 식대/간식"
+                            if remark == "카드대금": remark = "부서 식대"
                     elif is_supplies:
                         acct_code = "5300000"
-                elif last4 in CEO_CARDS:
+
+                elif last4 in CEO_CARDS:  # 대표이사 카드
                     if is_food:
                         acct_code = custom_entertain_code
                         remark = "거래처 접대"
@@ -297,14 +342,16 @@ if uploaded_file is not None:
                         remark = "현장 소모품"
                     elif is_supplies:
                         acct_code = "5300000"
-                elif last4 in MAINT_CARDS:
+
+                elif last4 in MAINT_CARDS:  # 공무팀 카드
                     if is_food:
                         acct_code = "5110000"
                         if remark == "카드대금": remark = "공무팀 식대/간식"
                     else:
                         acct_code = "5300000"
                         if remark == "카드대금": remark = "현장 소모품"
-                else:
+
+                else:  # 기타/관리부 카드
                     if last4 in ENTERTAIN_CARDS and is_food:
                         acct_code = custom_entertain_code
                         remark = "거래처 접대"
