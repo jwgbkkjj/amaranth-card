@@ -25,7 +25,7 @@ except:
     GEMINI_API_KEY = ""
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("사내 회계데이터 학습 완료 | 부서별/카드별 세부 규칙 적용")
+st.caption("사내 회계데이터 학습 완료 | 접대비 코드 정확 반영 | 부서별/카드별 세부 규칙 적용")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -46,6 +46,7 @@ with st.sidebar:
     st.header("🏢 아마란스 10 기본값")
     default_year = st.text_input("전표 기본 연도", value=str(datetime.now().year))
     default_credit_account = st.text_input("대변(미지급금) 계정코드", value="2530000")
+    custom_entertain_code = st.text_input("접대비(신용카드) 계정코드", value="8130003")
 
 # ------------------------------------------------------------------------------
 # 데이터 구조 및 헬퍼 함수
@@ -111,20 +112,20 @@ def clean_date(val, base_year):
 # ------------------------------------------------------------------------------
 # AI 모델 호출 함수
 # ------------------------------------------------------------------------------
-def classify_with_gemini(client, batch_df):
-    system_instruction = """
+def classify_with_gemini(client, batch_df, entertain_code):
+    system_instruction = f"""
     당신은 대한민국 기업의 전문 회계 에이전트입니다.
-    제공된 법인카드 승인내역을 당사의 [실제 회계 처리 이력 및 카드별 세부 기준]에 따라 정확하게 7자리 계정과목으로 분류하세요.
+    제공된 법인카드 승인내역을 당사의 [실제 회계 처리 이력 및 카드별 세부 기준]에 따라 정확하게 계정과목으로 분류하세요.
 
     [카드 번호 및 부서별 특수 규칙]
-    - 영업사원 카드 (6788, 3992, 7786, 3958): 15,000원 이상 식대는 '8130003'(접대비). 그 미만은 '8110000'(복리후생비).
-    - 대표이사 카드 (8348): 식대는 무조건 '8130003'(접대비). 쿠팡와우는 '8310000', 일반 쿠팡 구매는 '5300000'.
+    - 영업사원 카드 (6788, 3992, 7786, 3958): 15,000원 이상 식대는 '{entertain_code}'(접대비). 그 미만은 '8110000'(복리후생비).
+    - 대표이사 카드 (8348): 식대는 무조건 '{entertain_code}'(접대비). 쿠팡와우는 '8310000', 일반 쿠팡 구매는 '5300000'.
     - 공무팀 카드 (4490, 9530): 대부분 '5300000'(소모품비-제조)로 처리하며, 식대는 '5110000'(복리후생비-제조)로 처리.
 
-    [일반 사내 회계 기준 (7자리)]
-    1. 온라인 PG 및 결제대행사 (사내 이력 학습):
+    [일반 사내 회계 기준]
+    1. 온라인 PG 및 결제대행사:
        - 이니시스, NICE결제대행, 나이스페이: 신용조사/수수료 건은 '8310000' (지급수수료), 물품 구매는 '5300000'/'8300000' (소모품비)
-       - 네이버페이, 네이버파이낸셜, 쿠팡, 토스페이먼츠, 11번가: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
+       - 네이버페이, 네이버파이낸셜, 쿠팡, 토스페이먼츠: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
        - 카카오T (택시, 대리, 주차), 나이스인프라: '8120000' (여비교통비)
        - 카드알림SMS, 통신사알림: '8310000' (지급수수료) 또는 '8140000' (통신비)
     2. 오프라인 가맹점 기준:
@@ -134,7 +135,7 @@ def classify_with_gemini(client, batch_df):
        - 삼성화재/보험사: '8210000' (보험료)
        - 소모품/공구/철물/문구: 관리부 카드('5630','1072','4760')는 '8300000', 그 외 카드는 '5300000'
 
-    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요. (예: 주유비, 사무용품, 접대 식대 등)
+    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요.
     """
 
     data_summary = []
@@ -148,7 +149,6 @@ def classify_with_gemini(client, batch_df):
 
     prompt_str = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
-    # ❗ [핵심 수정] 공식 지원 모델인 gemini-1.5-flash 로 완벽 적용
     response = client.models.generate_content(
         model="gemini-3.6-flash",
         contents=prompt_str,
@@ -200,7 +200,7 @@ if uploaded_file is not None:
     if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("AI 및 부서별 카드 규칙 적용하여 전표 생성 중..."):
+        with st.spinner("사내 기준 적용 및 전표 생성 중..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
@@ -219,13 +219,11 @@ if uploaded_file is not None:
                 st.warning("유효한 결제 내역을 찾지 못했습니다.")
                 st.stop()
 
-            # ❗ AI 분석 시도 (실패 시 에러 메시지를 화면에 명확히 띄워줍니다)
             try:
-                ai_result = classify_with_gemini(client, temp_df)
+                ai_result = classify_with_gemini(client, temp_df, custom_entertain_code)
                 result_map = {item["index"]: item for item in ai_result.get("items", [])}
             except Exception as e:
                 st.error(f"❌ AI 분석 중 에러가 발생했습니다: {e}")
-                st.warning("AI가 작동하지 않아 부서별 하드 코딩 룰만 적용됩니다. (결과가 부정확할 수 있습니다)")
                 result_map = {}
 
             SALES_CARDS = {"6788", "3992", "7786", "3958"}
@@ -259,13 +257,15 @@ if uploaded_file is not None:
                 except:
                     is_weekend = False
 
-                # AI 결과 받아오기 (AI가 실패했을 경우 5300000 기본값 사용)
                 ai_info = result_map.get(idx, {})
                 acct_code = ai_info.get("account_code", "5300000")
                 remark = ai_info.get("remark", "카드대금")
                 cat_type = ai_info.get("category_type", "OTHER")
 
-                # 음식점/소모품 여부 2차 판별
+                # 접대비 코드가 811000 등으로 오인식되지 않도록 방어
+                if "접대" in ai_info.get("account_name", "") or acct_code in ["8130003", "811003", "8130000"]:
+                    acct_code = custom_entertain_code
+
                 is_food = ("식" in raw_merchant or "카페" in raw_merchant or "커피" in raw_merchant or 
                            "다과" in raw_merchant or "베이커리" in raw_merchant or "장어" in raw_merchant or
                            "이자카야" in raw_merchant or "뷔페" in raw_merchant or
@@ -273,11 +273,11 @@ if uploaded_file is not None:
                 is_supplies = ("소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES" or
                                "쿠팡" in raw_merchant or "디포" in raw_merchant or "네이버" in raw_merchant)
 
-                # ====== 파이썬 강제 규칙 (부서별 우선 적용) ======
+                # ====== 파이썬 강제 규칙 ======
                 if last4 in SALES_CARDS:
                     if is_food:
                         if total_amt >= 15000:
-                            acct_code = "8130003"
+                            acct_code = custom_entertain_code
                             remark = "거래처 접대"
                         else:
                             acct_code = "8110000"
@@ -286,7 +286,7 @@ if uploaded_file is not None:
                         acct_code = "5300000"
                 elif last4 in CEO_CARDS:
                     if is_food:
-                        acct_code = "8130003"
+                        acct_code = custom_entertain_code
                         remark = "거래처 접대"
                     elif "쿠팡와우" in mer_nospace:
                         acct_code = "8310000"
@@ -305,7 +305,7 @@ if uploaded_file is not None:
                         if remark == "카드대금": remark = "현장 소모품"
                 else:
                     if last4 in ENTERTAIN_CARDS and is_food:
-                        acct_code = "8130003"
+                        acct_code = custom_entertain_code
                         remark = "거래처 접대"
                     elif is_supplies:
                         if last4 in ADMIN_CARDS:
