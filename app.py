@@ -150,7 +150,7 @@ def classify_with_gemini(client, batch_df):
 
     # ❗ [핵심 수정] 공식 지원 모델인 gemini-1.5-flash 로 완벽 적용
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt_str,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
