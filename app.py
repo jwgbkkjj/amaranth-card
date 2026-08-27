@@ -22,7 +22,7 @@ PASSWORD = "sj123456!"
 GEMINI_API_KEY = "AQ.Ab8RN6LswiAaKJaztHp9yh1qd6xFwb1nll_N79XHfJNPW5lReA"
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("신한/우리/하나카드 자동 인식 | 7자리 계정과목 적용 | 아마란스 서식(회계단위 1000) 맞춤")
+st.caption("신한/우리/하나카드 자동 인식 | 아마란스 10 정규 양식 (E,I,L 공란) | 대변(미지급금) 총합 1줄 처리")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -35,7 +35,7 @@ st.success("인증 완료되었습니다.")
 st.divider()
 
 if GEMINI_API_KEY == "여기에_발급받은_API_키를_붙여넣으세요" or not GEMINI_API_KEY:
-    st.error("코드 19번째 줄의 'GEMINI_API_KEY'에 실제 API 키를 입력 후 저장해주세요.")
+    st.error("코드 상단의 'GEMINI_API_KEY'에 실제 API 키를 입력 후 저장해주세요.")
     st.stop()
 
 # 사이드바 설정
@@ -59,7 +59,7 @@ class BatchClassification(BaseModel):
     items: list[ClassificationResult]
 
 def detect_card_info(df_raw):
-    """카드사 종류 및 진짜 헤더 행 위치 자동 감지"""
+    """카드사 종류 및 헤더 행 자동 감지"""
     for r_idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(x) for x in df_raw.iloc[r_idx].values if pd.notna(x)]).replace("\n", " ")
         if "이용가맹점(은행)명" in row_str or "이용카드" in row_str:
@@ -158,7 +158,6 @@ if uploaded_file is not None:
         is_csv = uploaded_file.name.lower().endswith(".csv")
         raw_df = pd.read_csv(uploaded_file, header=None) if is_csv else pd.read_excel(uploaded_file, header=None)
         
-        # 카드사 및 헤더 행 자동 감지
         detected_card, header_row_idx = detect_card_info(raw_df)
         
         uploaded_file.seek(0)
@@ -171,10 +170,9 @@ if uploaded_file is not None:
     df_card.columns = [str(c).replace('\n', '').replace(' ', '').strip() for c in df_card.columns]
     cols = df_card.columns.tolist()
 
-    st.success(f"💳 감지된 카드사: **{detected_card}** (헤더 자동 매핑 완료)")
+    st.success(f"💳 감지된 카드사: **{detected_card}**")
     st.dataframe(df_card.head())
 
-    # 3개 카드사 전용 열 자동 매핑
     date_idx = get_col_idx(cols, ["이용일", "이용일자", "승인일자", "일자"], ["일자", "이용일", "일시"], 0)
     card_idx = get_col_idx(cols, ["이용카드", "카드번호", "카드"], ["카드"], 1 if len(cols) > 1 else 0)
     mer_idx = get_col_idx(cols, ["이용가맹점(은행)명", "가맹점명", "이용가맹점명", "상호"], ["가맹점", "상호"], 2 if len(cols) > 2 else 0)
@@ -187,17 +185,16 @@ if uploaded_file is not None:
     with col4: sel_amount = st.selectbox("이용금액 열", cols, index=amt_idx)
     with col5: sel_card_corp = st.text_input("대변 거래처명", value=detected_card)
 
-    if st.button("🚀 아마란스 10 양식 전표 생성 (주말 색칠 포함)"):
+    if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("데이터 정제 및 Gemini 3.6 Flash 분개 생성 중..."):
+        with st.spinner("AI가 분개를 작성 중입니다..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
             temp_df["가맹점명"] = df_card[sel_merchant].astype(str)
             temp_df["이용금액"] = df_card[sel_amount].apply(clean_amount)
 
-            # 불필요한 하단 합계, 여백 줄, 잔여 헤더 행 완벽 필터링
             temp_df = temp_df[
                 (temp_df["가맹점명"].str.strip() != "") & 
                 (temp_df["가맹점명"] != "nan") & 
@@ -207,10 +204,9 @@ if uploaded_file is not None:
             ].reset_index(drop=True)
 
             if len(temp_df) == 0:
-                st.warning("유효한 결제 내역을 찾지 못했습니다. 드롭다운 열을 확인해주세요.")
+                st.warning("유효한 결제 내역을 찾지 못했습니다.")
                 st.stop()
 
-            # AI 분석 실행
             ai_result = classify_with_gemini(client, temp_df)
             result_map = {item["index"]: item for item in ai_result.get("items", [])}
 
@@ -218,18 +214,21 @@ if uploaded_file is not None:
             ENTERTAIN_CARDS = {"4015", "8348"}
             
             today_str = datetime.now().strftime("%Y%m%d")
+            current_month = datetime.now().month  # 현재 월 추출
             line_seq = 1
 
             rows = []
             weekend_flags = []
+            total_card_amount = 0
 
+            # 1. 차변(3) 항목 순차 생성
             for idx, row in temp_df.iterrows():
                 trans_date = row["이용일자"]
                 raw_merchant = row["가맹점명"].strip()
                 total_amt = row["이용금액"]
+                total_card_amount += total_amt
                 last4 = row["카드번호"][-4:] if len(row["카드번호"]) >= 4 else row["카드번호"]
 
-                # 주소 제거: 2개 이상의 연속 공백 뒤 주소 잘라내기
                 clean_merchant_name = re.split(r'\s{2,}', raw_merchant)[0].strip()
 
                 try:
@@ -249,7 +248,6 @@ if uploaded_file is not None:
                 remark = ai_info.get("remark", "카드대금")
                 cat_type = ai_info.get("category_type", "")
 
-                # 하드 룰 적용
                 if last4 in ENTERTAIN_CARDS and ("식" in raw_merchant or "카페" in raw_merchant or cat_type == "MEAL" or "8110000" in acct_code):
                     acct_code = "8130003"
                     remark = "거래처 접대"
@@ -259,47 +257,51 @@ if uploaded_file is not None:
                     else:
                         acct_code = "5300000"
 
-                # 적요 포맷: [YYMMDD] 가맹점명 적요 (카드:XXXX)
                 usage_yymmdd = trans_date[2:8] if len(trans_date) == 8 else trans_date
                 final_remark = f"[{usage_yymmdd}] {clean_merchant_name} {remark} (카드:{last4})"
 
-                # 1) 차변 (차대구분 3)
+                # 아마란스 정규 포맷에 맞게 열 배치 (E:품의내역, I:거래처코드, L:증빙코드 공란)
                 rows.append({
                     "회계단위": "1000",
                     "작성일자": today_str,
                     "작성번호": "100",
                     "라인순번": line_seq,
+                    "품의내역": "",        # E열
                     "전표유형": "1",
-                    "차대구분": "3",
+                    "차대구분": "3",        # 차변
                     "계정과목": acct_code,
+                    "거래처": "",          # I열
                     "거래처명": clean_merchant_name,
                     "계정금액": total_amt,
-                    "적요": final_remark,
+                    "증빙코드": "",        # L열
+                    "적요": final_remark,  # M열
                 })
                 weekend_flags.append(is_weekend)
                 line_seq += 1
 
-                # 2) 대변 (차대구분 4)
-                rows.append({
-                    "회계단위": "1000",
-                    "작성일자": today_str,
-                    "작성번호": "100",
-                    "라인순번": line_seq,
-                    "전표유형": "1",
-                    "차대구분": "4",
-                    "계정과목": default_credit_account,
-                    "거래처명": sel_card_corp,
-                    "계정금액": total_amt,
-                    "적요": final_remark,
-                })
-                weekend_flags.append(is_weekend)
-                line_seq += 1
+            # 2. 맨 마지막 대변(4) 총액 1건 생성 (당월 반영)
+            rows.append({
+                "회계단위": "1000",
+                "작성일자": today_str,
+                "작성번호": "100",
+                "라인순번": line_seq,
+                "품의내역": "",
+                "전표유형": "1",
+                "차대구분": "4",            # 대변
+                "계정과목": default_credit_account,
+                "거래처": "",
+                "거래처명": sel_card_corp,
+                "계정금액": total_card_amount,
+                "증빙코드": "",
+                "적요": f"법인카드 {current_month}월 결제대금 총합계 ({sel_card_corp} {len(temp_df)}건)",
+            })
+            weekend_flags.append(False)
 
             df_amaranth = pd.DataFrame(rows)
-            st.success("✅ 아마란스 10 양식 변환이 완료되었습니다!")
+            st.success("✅ 변환이 완료되었습니다!")
             st.dataframe(df_amaranth, use_container_width=True)
 
-            # 엑셀 서식 적용 (주말 결제 노란색 하이라이트)
+            # 엑셀 다운로드 생성 및 주말 색상 적용
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_amaranth.to_excel(writer, index=False, sheet_name="아마란스전표업로드")
