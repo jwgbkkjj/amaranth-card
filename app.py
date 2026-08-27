@@ -17,7 +17,7 @@ st.set_page_config(page_title="AI 법인카드 전표 변환기", page_icon="�
 PASSWORD = "sj123456!"
 
 # ==============================================================================
-# [설정 2] Google Gemini API Key 설정 (Streamlit 보안 금고 사용)
+# [설정 2] Google Gemini API Key (Streamlit Secrets 연동)
 # ==============================================================================
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -25,7 +25,7 @@ except:
     GEMINI_API_KEY = ""
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("사내 회계데이터 학습 완료 | 부서별/카드별 세부 규칙 적용 | 클라우드 보안 적용")
+st.caption("사내 회계데이터 학습 완료 | 부서별/카드별 세부 규칙 적용")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -38,7 +38,7 @@ st.success("인증 완료되었습니다.")
 st.divider()
 
 if not GEMINI_API_KEY:
-    st.error("⚠️ 우측 하단의 [Manage app] -> [Settings] -> [Secrets] 에 API 키를 먼저 등록해주세요.")
+    st.error("⚠️ Streamlit 관리자 화면 [Settings] -> [Secrets] 에 GEMINI_API_KEY를 등록해주세요.")
     st.stop()
 
 # 사이드바 설정
@@ -46,17 +46,16 @@ with st.sidebar:
     st.header("🏢 아마란스 10 기본값")
     default_year = st.text_input("전표 기본 연도", value=str(datetime.now().year))
     default_credit_account = st.text_input("대변(미지급금) 계정코드", value="2530000")
-    st.info("💡 신한/우리/하나카드는 업로드 시 대변 거래처명이 자동으로 지정됩니다.")
 
 # ------------------------------------------------------------------------------
-# Pydantic 데이터 구조 및 헬퍼 함수
+# 데이터 구조 및 헬퍼 함수
 # ------------------------------------------------------------------------------
 class ClassificationResult(BaseModel):
     index: int
-    category_type: str = Field(description="분류: 'MEAL', 'SUPPLIES', 'TRAFFIC', 'FEE', 'OTHER'")
-    account_code: str = Field(description="계정과목코드")
+    category_type: str = Field(description="분류: MEAL, SUPPLIES, TRAFFIC, FEE, OTHER")
+    account_code: str = Field(description="7자리 계정과목코드")
     account_name: str = Field(description="계정과목명")
-    remark: str = Field(description="전표 적요 (사용 목적만 간결하게)")
+    remark: str = Field(description="전표 적요")
 
 class BatchClassification(BaseModel):
     items: list[ClassificationResult]
@@ -110,7 +109,7 @@ def clean_date(val, base_year):
     return val_str[:8]
 
 # ------------------------------------------------------------------------------
-# AI 모델 호출 함수 
+# AI 분류 함수
 # ------------------------------------------------------------------------------
 def classify_with_gemini(client, batch_df):
     system_instruction = """
@@ -125,7 +124,7 @@ def classify_with_gemini(client, batch_df):
     [일반 사내 회계 기준 (7자리)]
     1. 온라인 PG 및 결제대행사:
        - 이니시스, NICE결제대행, 나이스페이: 신용조사/수수료 건은 '8310000' (지급수수료), 물품 구매는 '5300000'/'8300000' (소모품비)
-       - 네이버페이, 쿠팡, 토스페이먼츠 등: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
+       - 네이버페이, 쿠팡, 토스페이먼츠: '5300000' (소모품비-제조) 또는 '8300000' (소모품비-판관)
        - 카카오T, 나이스인프라: '8120000' (여비교통비)
        - 알림SMS: '8310000' (지급수수료) 또는 '8140000' (통신비)
     2. 오프라인 가맹점 기준:
@@ -142,13 +141,15 @@ def classify_with_gemini(client, batch_df):
         data_summary.append({
             "index": int(idx),
             "merchant": str(row.get("가맹점명", "")).strip(),
-            "amount": row.get("이용금액", 0),
+            "amount": int(row.get("이용금액", 0)),
             "card_last4": str(row.get("카드번호", ""))[-4:],
         })
 
+    prompt_text = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
+
     response = client.models.generate_content(
-        model="gemini-1.5-flash",  # 또는 "gemini-2.0-flash"
-        contents=prompt,
+        model="gemini-2.5-flash",
+        contents=prompt_text,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
             response_mime_type="application/json",
@@ -158,7 +159,7 @@ def classify_with_gemini(client, batch_df):
     return json.loads(response.text)
 
 # -------------------------------------------------------------
-# 파일 업로드 UI & 데이터 정제
+# 파일 업로드 및 변환 UI
 # -------------------------------------------------------------
 uploaded_file = st.file_uploader("신한/우리/하나카드 이용내역 엑셀 파일 업로드", type=["xlsx", "xls", "csv"])
 
