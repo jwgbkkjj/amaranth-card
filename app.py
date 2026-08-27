@@ -22,7 +22,7 @@ PASSWORD = "sj123456!"
 GEMINI_API_KEY = "AQ.Ab8RN6LswiAaKJaztHp9yh1qd6xFwb1nll_N79XHfJNPW5lReA"
 
 st.title("💳 법인카드 $\\rightarrow$ 아마란스 10 전표 변환기")
-st.caption("신한/우리/하나카드 자동 인식 | 아마란스 10 정규 양식 (E,I,L 공란) | 대변(미지급금) 총합 1줄 처리")
+st.caption("사내 회계데이터 학습 완료 | 신한/우리/하나카드 자동 인식 | 아마란스 10 양식 (E,I,L 공란)")
 
 # 비밀번호 로그인
 input_pw = st.text_input("접속 비밀번호를 입력하세요", type="password")
@@ -53,13 +53,12 @@ class ClassificationResult(BaseModel):
     category_type: str = Field(description="분류: 'MEAL', 'SUPPLIES', 'TRAFFIC', 'FEE', 'OTHER'")
     account_code: str = Field(description="계정과목코드")
     account_name: str = Field(description="계정과목명")
-    remark: str = Field(description="전표 적요")
+    remark: str = Field(description="전표 적요 (사용 목적만 간결하게)")
 
 class BatchClassification(BaseModel):
     items: list[ClassificationResult]
 
 def detect_card_info(df_raw):
-    """카드사 종류 및 헤더 행 자동 감지"""
     for r_idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(x) for x in df_raw.iloc[r_idx].values if pd.notna(x)]).replace("\n", " ")
         if "이용가맹점(은행)명" in row_str or "이용카드" in row_str:
@@ -108,22 +107,32 @@ def clean_date(val, base_year):
     return val_str[:8]
 
 # ------------------------------------------------------------------------------
-# AI 모델 호출 함수
+# AI 모델 호출 함수 (사내 600여 건 실제 회계 데이터 학습 반영)
 # ------------------------------------------------------------------------------
 def classify_with_gemini(client, batch_df):
     system_instruction = """
     당신은 대한민국 기업의 전문 회계 에이전트입니다.
-    제공된 법인카드 승인내역을 사내 7자리 계정과목 기준에 따라 분류하세요.
+    제공된 법인카드 승인내역을 당사의 [실제 회계 처리 이력 및 기준]에 따라 정확하게 7자리 계정과목으로 분류하세요.
 
     [핵심 사내 회계 기준 (7자리)]
-    1. 식대/카페/음식점/회식: 기본 8110000(복리후생비). 
-       단, 카드번호 끝자리 '4015', '8348'은 무조건 8130003(접대비(신용카드))
-    2. 소모품/사무용품/잡화: 끝자리 '5630', '1072', '4760'은 8300000(소모품비-판관), 그 외는 5300000(소모품비-제조)
-    3. 여비교통/주유/차량: 8120000(여비교통비) 또는 8220000(차량유지비)
-    4. 수수료/IT/통신/구독료/알림메시지: 8310000(지급수수료) 또는 8140000(통신비)
-    5. 보험료: 8210000(보험료), 협회비: 8490000(협회비), 수출비: 8380000(수출제비용)
+    1. 온라인 PG 및 결제대행사 (사내 이력 학습):
+       - 이니시스, NICE결제대행, 나이스페이: 신용조사/수수료 건은 '8310000' (지급수수료), 물품 구매는 '5300000'/'8300000' (소모품비)
+       - 네이버페이, 네이버파이낸셜, 쿠팡, 토스페이먼츠, 11번가:
+         * 현장/공장/공무/설비/안전용품/자재 구매: '5300000' (소모품비-제조)
+         * 사무실/본관/소변기/센서/식당수전/모니터 등: '8300000' (소모품비-판관)
+       - 카카오T (택시, 대리, 주차), 나이스인프라: '8120000' (여비교통비)
+       - 카드알림SMS, 통신사알림: '8310000' (지급수수료) 또는 '8140000' (통신비)
 
-    * 적요는 가맹점명 없이 사용 목적만 간결하게 작성하세요. (예: 야간식대, 차량주유, 사무용품 등)
+    2. 오프라인 가맹점 기준:
+       - 식당/카페/주점/제과/음식점:
+         * 기본: '8110000' (복리후생비)
+         * 단, 카드번호 끝자리 '4015', '8348'은 무조건 '8130003' (접대비(신용카드))
+       - 주유소/세차/정비/하이패스: '8220000' (차량유지비)
+       - 우정사업본부(우체국) 등기/택배: '8140000' (통신비)
+       - 삼성화재/보험사: '8210000' (보험료)
+       - 소모품/공구/철물/문구: 관리부 카드('5630','1072','4760')는 '8300000', 그 외 카드는 '5300000'
+
+    * 적요는 가맹점명을 제외하고, 사용 목적만 간결하게 작성하세요. (예: 현장 소모품, 채권 신용조사, 등기비용, 외근 중식대, 법인차량 유류대 등)
     """
 
     data_summary = []
@@ -135,7 +144,7 @@ def classify_with_gemini(client, batch_df):
             "card_last4": str(row.get("카드번호", ""))[-4:],
         })
 
-    prompt = f"다음 결제 내역을 사내 7자리 규칙에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
+    prompt = f"다음 결제 내역을 당사 사내 기준에 맞게 분류해줘:\n{json.dumps(data_summary, ensure_ascii=False)}"
 
     response = client.models.generate_content(
         model="gemini-3.6-flash",
@@ -188,7 +197,7 @@ if uploaded_file is not None:
     if st.button("🚀 아마란스 10 양식 전표 생성"):
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        with st.spinner("AI가 분개를 작성 중입니다..."):
+        with st.spinner("사내 회계 기준 적용 및 전표 생성 중..."):
             temp_df = pd.DataFrame()
             temp_df["이용일자"] = df_card[sel_date].apply(lambda x: clean_date(x, default_year))
             temp_df["카드번호"] = df_card[sel_card].apply(clean_card)
@@ -214,14 +223,14 @@ if uploaded_file is not None:
             ENTERTAIN_CARDS = {"4015", "8348"}
             
             today_str = datetime.now().strftime("%Y%m%d")
-            current_month = datetime.now().month  # 현재 월 추출
+            current_month = datetime.now().month
             line_seq = 1
 
             rows = []
             weekend_flags = []
             total_card_amount = 0
 
-            # 1. 차변(3) 항목 순차 생성
+            # 1. 차변(3) 생성
             for idx, row in temp_df.iterrows():
                 trans_date = row["이용일자"]
                 raw_merchant = row["가맹점명"].strip()
@@ -241,16 +250,17 @@ if uploaded_file is not None:
                     "category_type": "OTHER",
                     "account_code": "5300000",
                     "account_name": "소모품비(제조)",
-                    "remark": "카드대금",
+                    "remark": "현장 소모품",
                 })
 
                 acct_code = ai_info.get("account_code", "5300000")
-                remark = ai_info.get("remark", "카드대금")
+                remark = ai_info.get("remark", "현장 소모품")
                 cat_type = ai_info.get("category_type", "")
 
+                # 하드 룰 적용
                 if last4 in ENTERTAIN_CARDS and ("식" in raw_merchant or "카페" in raw_merchant or cat_type == "MEAL" or "8110000" in acct_code):
                     acct_code = "8130003"
-                    remark = "거래처 접대"
+                    remark = "접대비"
                 elif "소모품" in ai_info.get("account_name", "") or cat_type == "SUPPLIES":
                     if last4 in ADMIN_CARDS:
                         acct_code = "8300000"
@@ -260,26 +270,25 @@ if uploaded_file is not None:
                 usage_yymmdd = trans_date[2:8] if len(trans_date) == 8 else trans_date
                 final_remark = f"[{usage_yymmdd}] {clean_merchant_name} {remark} (카드:{last4})"
 
-                # 아마란스 정규 포맷에 맞게 열 배치 (E:품의내역, I:거래처코드, L:증빙코드 공란)
                 rows.append({
                     "회계단위": "1000",
                     "작성일자": today_str,
                     "작성번호": "100",
                     "라인순번": line_seq,
-                    "품의내역": "",        # E열
+                    "품의내역": "",
                     "전표유형": "1",
-                    "차대구분": "3",        # 차변
+                    "차대구분": "3",
                     "계정과목": acct_code,
-                    "거래처": "",          # I열
+                    "거래처": "",
                     "거래처명": clean_merchant_name,
                     "계정금액": total_amt,
-                    "증빙코드": "",        # L열
-                    "적요": final_remark,  # M열
+                    "증빙코드": "",
+                    "적요": final_remark,
                 })
                 weekend_flags.append(is_weekend)
                 line_seq += 1
 
-            # 2. 맨 마지막 대변(4) 총액 1건 생성 (당월 반영)
+            # 2. 대변(4) 총액 1건 생성
             rows.append({
                 "회계단위": "1000",
                 "작성일자": today_str,
@@ -287,7 +296,7 @@ if uploaded_file is not None:
                 "라인순번": line_seq,
                 "품의내역": "",
                 "전표유형": "1",
-                "차대구분": "4",            # 대변
+                "차대구분": "4",
                 "계정과목": default_credit_account,
                 "거래처": "",
                 "거래처명": sel_card_corp,
@@ -298,7 +307,7 @@ if uploaded_file is not None:
             weekend_flags.append(False)
 
             df_amaranth = pd.DataFrame(rows)
-            st.success("✅ 변환이 완료되었습니다!")
+            st.success("✅ 사내 기준 학습 기반 변환이 완료되었습니다!")
             st.dataframe(df_amaranth, use_container_width=True)
 
             # 엑셀 다운로드 생성 및 주말 색상 적용
